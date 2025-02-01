@@ -40,7 +40,7 @@ func main() {
 
 	fmt.Println("You can now send messages!")
 
-	getHistory(channel)
+	//getHistory(channel)
 
 	subscribe(channel)
 
@@ -48,6 +48,10 @@ func main() {
 
 	// Start the goroutine to allow for publishing messages
 	publishing(channel)
+}
+
+type LatencyStats struct {
+	Min, Max, Avg float64
 }
 
 // func getHistory(channel *ably.RealtimeChannel) {
