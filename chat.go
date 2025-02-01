@@ -32,7 +32,7 @@ func main() {
 	client.Connect()
 	// Connect to the Ably Channel with name 'chat'
 	channel := client.Channels.Get("chat")
-	// Enter the Presence set of the channel
+	// Enter the Presence set of the channel//actively subscribed users
 	channel.Presence.Enter(context.Background(), "")
 	channel.OnAll(func(change ably.ChannelStateChange) {
 		fmt.Printf("Channel event event: %s channel=%s state=%s reason=%s", channel.Name, change.Event, change.Current, change.Reason)
@@ -50,24 +50,24 @@ func main() {
 	publishing(channel)
 }
 
-func getHistory(channel *ably.RealtimeChannel) {
-	// Before subscribing for messages, check the channel's
-	// History for any missed messages. By default a channel
-	// will keep 2 minutes of history available, but this can
-	// be extended to 48 hours
-	pages, err := channel.History().Pages(context.Background())
-	if err != nil || pages == nil {
-		return
-	}
+// func getHistory(channel *ably.RealtimeChannel) {
+// 	// Before subscribing for messages, check the channel's
+// 	// History for any missed messages. By default a channel
+// 	// will keep 2 minutes of history available, but this can
+// 	// be extended to 48 hours
+// 	pages, err := channel.History().Pages(context.Background())
+// 	if err != nil || pages == nil {
+// 		return
+// 	}
 
-	hasHistory := true
+// 	hasHistory := true
 
-	for ; hasHistory; hasHistory = pages.Next(context.Background()) {
-		for _, msg := range pages.Items() {
-			fmt.Printf("Previous message from %v: '%v'\n", msg.ClientID, msg.Data)
-		}
-	}
-}
+// 	for ; hasHistory; hasHistory = pages.Next(context.Background()) {
+// 		for _, msg := range pages.Items() {
+// 			fmt.Printf("Previous message from %v: '%v'\n", msg.ClientID, msg.Data)
+// 		}
+// 	}
+// }
 
 func subscribe(channel *ably.RealtimeChannel) {
 	// Subscribe to messages sent on the channel
