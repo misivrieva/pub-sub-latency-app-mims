@@ -32,46 +32,18 @@ func main() {
 	client.Connect()
 	// Connect to the Ably Channel with name 'chat'
 	channel := client.Channels.Get("chat")
-	// Enter the Presence set of the channel//actively subscribed users
-	channel.Presence.Enter(context.Background(), "")
+
+	//Keep tracck of state, you need to be attached to send messages
 	channel.OnAll(func(change ably.ChannelStateChange) {
 		fmt.Printf("Channel event event: %s channel=%s state=%s reason=%s", channel.Name, change.Event, change.Current, change.Reason)
 	})
 
 	fmt.Println("You can now send messages!")
-
-	//getHistory(channel)
-
+	// Start the goroutine to allow for subscribing
 	subscribe(channel)
-
-	subscribePresence(channel)
-
 	// Start the goroutine to allow for publishing messages
 	publishing(channel)
 }
-
-type LatencyStats struct {
-	Min, Max, Avg float64
-}
-
-// func getHistory(channel *ably.RealtimeChannel) {
-// 	// Before subscribing for messages, check the channel's
-// 	// History for any missed messages. By default a channel
-// 	// will keep 2 minutes of history available, but this can
-// 	// be extended to 48 hours
-// 	pages, err := channel.History().Pages(context.Background())
-// 	if err != nil || pages == nil {
-// 		return
-// 	}
-
-// 	hasHistory := true
-
-// 	for ; hasHistory; hasHistory = pages.Next(context.Background()) {
-// 		for _, msg := range pages.Items() {
-// 			fmt.Printf("Previous message from %v: '%v'\n", msg.ClientID, msg.Data)
-// 		}
-// 	}
-// }
 
 func subscribe(channel *ably.RealtimeChannel) {
 	// Subscribe to messages sent on the channel
@@ -80,21 +52,6 @@ func subscribe(channel *ably.RealtimeChannel) {
 	})
 	if err != nil {
 		err := fmt.Errorf("subscribing to channel: %w", err)
-		fmt.Println(err)
-	}
-}
-
-func subscribePresence(channel *ably.RealtimeChannel) {
-	// Subscribe to presence events (people entering and leaving) on the channel
-	_, pErr := channel.Presence.SubscribeAll(context.Background(), func(msg *ably.PresenceMessage) {
-		if msg.Action == ably.PresenceActionEnter {
-			fmt.Printf("%v has entered the chat\n", msg.ClientID)
-		} else if msg.Action == ably.PresenceActionLeave {
-			fmt.Printf("%v has left the chat\n", msg.ClientID)
-		}
-	})
-	if pErr != nil {
-		err := fmt.Errorf("subscribing to presence in channel: %w", pErr)
 		fmt.Println(err)
 	}
 }
