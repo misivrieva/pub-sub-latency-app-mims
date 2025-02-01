@@ -24,14 +24,21 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	fmt.Println("You can now send messages!")
-
+	// Set up connection events handler.
+	client.Connection.OnAll(func(change ably.ConnectionStateChange) {
+		fmt.Printf("Connection event: %s state=%s reason=%s", change.Event, change.Current, change.Reason)
+	})
+	// Then connect.
+	client.Connect()
 	// Connect to the Ably Channel with name 'chat'
 	channel := client.Channels.Get("chat")
-
 	// Enter the Presence set of the channel
 	channel.Presence.Enter(context.Background(), "")
+	channel.OnAll(func(change ably.ChannelStateChange) {
+		fmt.Printf("Channel event event: %s channel=%s state=%s reason=%s", channel.Name, change.Event, change.Current, change.Reason)
+	})
+
+	fmt.Println("You can now send messages!")
 
 	getHistory(channel)
 
