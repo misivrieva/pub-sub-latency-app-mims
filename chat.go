@@ -12,140 +12,160 @@ import (
 	"time"
 
 	"github.com/ably/ably-go/ably"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
+
+var rootCmd = &cobra.Command{
+	Use:   "ably-latency",
+	Short: "Measure latency of Ably Realtime messages",
+	Run:   run,
+}
+
+func init() {
+	cobra.OnInitialize(initConfig)
+	rootCmd.PersistentFlags().String("channel", "latency-test", "Channel name to use")
+	rootCmd.PersistentFlags().Int("messages", 3, "Number of initial messages to send")
+	rootCmd.PersistentFlags().Int("interval", 5, "Interval between sending messages in seconds")
+	rootCmd.PersistentFlags().Int("listen", 30, "Duration to listen for responses in seconds")
+}
+
+func initConfig() {
+	viper.AutomaticEnv()
+	viper.BindPFlag("channel", rootCmd.PersistentFlags().Lookup("channel"))
+	viper.BindPFlag("messages", rootCmd.PersistentFlags().Lookup("messages"))
+	viper.BindPFlag("interval", rootCmd.PersistentFlags().Lookup("interval"))
+	viper.BindPFlag("listen", rootCmd.PersistentFlags().Lookup("listen"))
+}
+
+func run(cmd *cobra.Command, args []string) {
+	apiKey := viper.GetString("ABLY_API_KEY")
+	if apiKey == "" {
+		log.Fatal("ABLY_API_KEY environment variable is required")
+	}
+
+	channelName := viper.GetString("channel")
+	numMessages := viper.GetInt("messages")
+	interval := viper.GetInt("interval")
+
+	client, err := ably.NewRealtime(ably.WithKey(apiKey))
+	if err != nil {
+		log.Fatalf("Error creating Ably client: %v", err)
+	}
+	defer client.Close()
+
+	channel := client.Channels.Get(channelName)
+
+	// Start publishing messages
+	go publishMessages(channel, numMessages, interval)
+
+	// Start listening for messages
+	subscribe(channel)
+
+	// Keep the program running
+	select {}
+}
 
 // Message represents the initial message sent by an instance.
 type Message struct {
-	SenderID  string  `json:"sender_id"` // Unique identifier for the sender
-	Timestamp float64 `json:"timestamp"` // Timestamp in seconds with microsecond precision
+	SenderID  string  `json:"sender_id"`
+	Timestamp float64 `json:"timestamp"`
 }
 
 // Response represents the response message sent by a receiver.
 type Response struct {
-	OriginalMessage Message `json:"original_message"` // Original message details
-	ReceiverID      string  `json:"receiver_id"`      // Unique identifier for the receiver
-	ReceivedAt      float64 `json:"received_at"`      // Timestamp when the message was received
-}
-
-// LatencyStats holds latency statistics for a pair of instances.
-type LatencyStats struct {
-	Min, Max, Avg float64
+	OriginalMessage Message `json:"original_message"`
+	ReceiverID      string  `json:"receiver_id"`
+	ReceivedAt      float64 `json:"received_at"`
 }
 
 var latencies = make(map[string][]float64)
 var mu sync.RWMutex
 
 func main() {
-	fmt.Println("Type your username")
+	fmt.Print("Type your username: ")
 	reader := bufio.NewReader(os.Stdin)
 	username, _ := reader.ReadString('\n')
-	username = strings.Replace(username, "\n", "", -1)
+	username = strings.TrimSpace(username)
 
-	// Connect to Ably using the API key and ClientID specified above
-	client, err := ably.NewRealtime(
-		ably.WithKey("02uj7w.guUaIg:zWMaFId7FlDQysfzRUph2Q2Nu9a1FhrnbRHjpdAK33M"))
-	//ably.WithEchoMessages(false), // Uncomment to stop messages you send from being sent back
-	ably.WithClientID(username)
-	if err != nil {
-		panic(err)
+	apiKey := os.Getenv("ABLY_API_KEY")
+	if apiKey == "" {
+		log.Fatal("ABLY_API_KEY environment variable is required")
 	}
-	// Set up connection events handler.
-	client.Connection.OnAll(func(change ably.ConnectionStateChange) {
-		fmt.Printf("Connection event: %s state=%s reason=%s", change.Event, change.Current, change.Reason)
-	})
-	// Then connect.
-	client.Connect()
-	// Connect to the Ably Channel with name 'chat'
+
+	client, err := ably.NewRealtime(ably.WithKey(apiKey), ably.WithClientID(username))
+	if err != nil {
+		log.Fatalf("Error creating Ably client: %v", err)
+	}
+	defer client.Close()
+
 	channel := client.Channels.Get("chat")
 
 	// Generate a unique ID for this instance
 	instanceID := fmt.Sprintf("instance-%d", time.Now().UnixNano())
 
 	// Subscribe to the channel
-	// sub, err := channel.SubscribeAll(context.Background(), func(msg *ably.Message) {
-	// 	subscribe(channel)
-	// })
-	sub, err := channel.SubscribeAll(context.Background(), func(msg *ably.Message) {
-		subscribe(channel)
+	_, err = channel.SubscribeAll(context.Background(), func(msg *ably.Message) {
+		handleMessage(channel, instanceID, msg)
 	})
 	if err != nil {
 		log.Fatalf("Error subscribing to channel: %v", err)
 	}
-	//Keep tracck of state, you need to be attached to send messages
-	channel.OnAll(func(change ably.ChannelStateChange) {
-		fmt.Printf("Channel event event: %s channel=%s state=%s reason=%s", channel.Name, change.Event, change.Current, change.Reason)
-	})
-	// Start the goroutine to allow for publishing messages
-	publishing(channel)
-	// Goroutine to send messages at regular intervals
-	go func() {
-		for i := 0; i < 3; i++ { // Send 3 messages by default
-			msg := Message{
-				SenderID:  instanceID,
-				Timestamp: float64(time.Now().UnixNano()) / 1e9, // Current time in seconds with microsecond precision
-			}
 
-			// Publish the message to the channel
-			if err := channel.Publish("message", msg); err != nil {
-				log.Printf("Error publishing message: %v", err)
-			}
+	// Start publishing messages
+	go publishing(channel)
 
-			time.Sleep(5 * time.Second) // Wait 5 seconds between messages
-		}
-	}()
-
-// Goroutine to listen for messages and responses
-go func() {
-	//That's too complex and there should be an easier way
-	for msg := range sub.Channel.Messages.All().Get(context.Background()) {}
-	switch msg.Type {
-		case "message":
-			// Handle incoming message
-			var receivedMsg Message
-			if err := json.Unmarshal(msg.Data, &receivedMsg); err != nil {
-				log.Printf("Error unmarshalling message: %v", err)
-				continue
-			}
-
-			// Send a response immediately
-			response := Response{
-				OriginalMessage: receivedMsg,
-				ReceiverID:      instanceID,
-				ReceivedAt:      float64(time.Now().UnixNano()) / 1e9,
-			}
-			if err := sub.Channel.Publish("response", response); err != nil {
-				log.Printf("Error publishing response: %v", err)
-			}
-
-		case "response":
-			// Handle incoming response
-			var response Response
-			if err := json.Unmarshal(msg.Data, &response); 
-			err != nil {
-				log.Printf("Error unmarshalling response: %v", err)}		
-	}}
-
-			// Calculate latency
-			latency := response.ReceivedAt - response.OriginalMessage.Timestamp
-			key := fmt.Sprintf("%s -> %s", response.OriginalMessage.SenderID, response.ReceiverID)
-
-			// Store latency in the map
-			mu.Lock()
-			latencies[key] = append(latencies[key], latency)
-			mu.Unlock()
-		}
+	// Keep the program running
+	select {}
 }
-}()
 
+func handleMessage(channel *ably.RealtimeChannel, instanceID string, msg *ably.Message) {
+	switch msg.Name {
+	case "message":
+		var receivedMsg Message
+		data, _ := msg.Data.([]byte)
+		if err := json.Unmarshal(data, &receivedMsg); err != nil {
+			log.Printf("Error unmarshalling message: %v", err)
+			return
+		}
+
+		// Send a response immediately
+		response := Response{
+			OriginalMessage: receivedMsg,
+			ReceiverID:      instanceID,
+			ReceivedAt:      float64(time.Now().UnixNano()) / 1e9,
+		}
+
+		responseData, _ := json.Marshal(response)
+		if err := channel.Publish(context.Background(), "response", responseData); err != nil {
+			log.Printf("Error publishing response: %v", err)
+		}
+
+	case "response":
+		var response Response
+		data, _ := msg.Data.([]byte)
+		if err := json.Unmarshal(data, &response); err != nil {
+			log.Printf("Error unmarshalling response: %v", err)
+			return
+		}
+
+		latency := response.ReceivedAt - response.OriginalMessage.Timestamp
+		key := fmt.Sprintf("%s -> %s", response.OriginalMessage.SenderID, response.ReceiverID)
+
+		mu.Lock()
+		latencies[key] = append(latencies[key], latency)
+		mu.Unlock()
+
+		fmt.Printf("Latency for %s: %.6f seconds\n", key, latency)
+	}
+}
 
 func subscribe(channel *ably.RealtimeChannel) {
-	// Subscribe to messages sent on the channel
 	_, err := channel.SubscribeAll(context.Background(), func(msg *ably.Message) {
 		fmt.Printf("Received message from %v: '%v'\n", msg.ClientID, msg.Data)
 	})
 	if err != nil {
-		err := fmt.Errorf("subscribing to channel: %w", err)
-		fmt.Println(err)
+		log.Printf("Error subscribing to channel: %v", err)
 	}
 }
 
@@ -153,38 +173,31 @@ func publishing(channel *ably.RealtimeChannel) {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
+		fmt.Print("Enter message: ")
 		text, _ := reader.ReadString('\n')
-		text = strings.ReplaceAll(text, "\n", "")
-		// Publish the message typed in to the Ably Channel
+		text = strings.TrimSpace(text)
+
 		err := channel.Publish(context.Background(), "message", text)
-		// await confirmation that message was received by Ably
 		if err != nil {
-			err := fmt.Errorf("publishing to channel: %w", err)
-			fmt.Println(err)
+			log.Printf("Error publishing to channel: %v", err)
 		}
 	}
 }
 
-// calculateStats calculates the minimum, maximum, and average latency.
-func calculateStats(latencies []float64) (min, max, avg float64) {
-	if len(latencies) == 0 {
-		return 0, 0, 0
-	}
+func publishMessages(channel *ably.RealtimeChannel, numMessages int, interval int) {
+	instanceID := fmt.Sprintf("instance-%d", time.Now().UnixNano())
 
-	min = latencies[0]
-	max = latencies[0]
-	sum := 0.0
-
-	for _, lat := range latencies {
-		if lat < min {
-			min = lat
+	for i := 0; i < numMessages; i++ {
+		msg := Message{
+			SenderID:  instanceID,
+			Timestamp: float64(time.Now().UnixNano()) / 1e9,
 		}
-		if lat > max {
-			max = lat
-		}
-		sum += lat
-	}
 
-	avg = sum / float64(len(latencies))
-	return min, max, avg
+		msgData, _ := json.Marshal(msg)
+		if err := channel.Publish(context.Background(), "message", msgData); err != nil {
+			log.Printf("Error publishing message: %v", err)
+		}
+
+		time.Sleep(time.Duration(interval) * time.Second)
+	}
 }
